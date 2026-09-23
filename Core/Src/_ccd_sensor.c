@@ -1,0 +1,90 @@
+#include "_ccd_sensor.h"
+#include "main.h"
+#include "spi.h"
+#include <string.h>
+
+enum
+{
+  CCD_PREFIX_BYTES = 10,
+  CCD_FRAME_BYTES = CCD_PREFIX_BYTES + CCD_SENSOR_PIXEL_COUNT,
+  CCD_SPI_CHUNK = 64
+};
+
+// DR 中断只设置标志，SPI 传输和像素翻转都在主循环完成。
+typedef struct
+{
+  volatile uint8_t ready;
+  volatile uint8_t reading;
+  uint16_t sequence;
+  uint8_t dummy[CCD_SPI_CHUNK];
+  uint8_t bytes[CCD_FRAME_BYTES];
+  CcdFrame frame;
+} CcdSensorState;
+
+static CcdSensorState sensor;
+
+void CcdSensor_Init(void)
+{
+  uint16_t index;
+
+  memset(&sensor, 0, sizeof(sensor));
+  for (index = 0U; index < CCD_SPI_CHUNK; ++index)
+    sensor.dummy[index] = 0xFFU;
+
+  // 模块的前 10 字节是帧头，循迹和上位机只使用后面的 1000 个像素。
+  sensor.frame.pixels = sensor.bytes + CCD_PREFIX_BYTES;
+
+  // 初始化前若 DR 已经拉低，也要读取这帧，避免只等下一次下降沿。
+  if (HAL_GPIO_ReadPin(CCD_DR_GPIO_Port, CCD_DR_Pin) == GPIO_PIN_RESET)
+    sensor.ready = 1U;
+}
+
+const CcdFrame *CcdSensor_ReadFrame(void)
+{
+  uint16_t received = 0U;
+  uint16_t index;
+  uint8_t *pixels = sensor.bytes + CCD_PREFIX_BYTES;
+  uint8_t success = 1U;
+
+  if (!sensor.ready) return 0;
+
+  sensor.reading = 1U;
+  sensor.ready = 0U;
+  HAL_GPIO_WritePin(CCD_CS_GPIO_Port, CCD_CS_Pin, GPIO_PIN_RESET);
+
+  // SPI 是全双工：发送 0xFF 才能同步读取模块输出的数据。
+  // 分段读取与原实现一致，避免在栈上准备整帧发送缓冲区。
+  while (received < CCD_FRAME_BYTES)
+  {
+    uint16_t count = CCD_FRAME_BYTES - received;
+    if (count > CCD_SPI_CHUNK) count = CCD_SPI_CHUNK;
+    if (HAL_SPI_TransmitReceive(&hspi1, sensor.dummy,
+                                sensor.bytes + received, count, 100U) != HAL_OK)
+    {
+      success = 0U;
+      break;
+    }
+    received += count;
+  }
+
+  HAL_GPIO_WritePin(CCD_CS_GPIO_Port, CCD_CS_Pin, GPIO_PIN_SET);
+  sensor.reading = 0U;
+  if (!success) return 0;
+
+  // 只镜像像素区，保留模块帧头；镜像后左、右方向与车体一致。
+  for (index = 0U; index < CCD_SENSOR_PIXEL_COUNT / 2U; ++index)
+  {
+    uint8_t value = pixels[index];
+    pixels[index] = pixels[CCD_SENSOR_PIXEL_COUNT - 1U - index];
+    pixels[CCD_SENSOR_PIXEL_COUNT - 1U - index] = value;
+  }
+
+  sensor.frame.sequence = ++sensor.sequence;
+  return &sensor.frame;
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t pin)
+{
+  if (pin == CCD_DR_Pin && !sensor.reading)
+    sensor.ready = 1U;
+}

@@ -1,0 +1,23 @@
+# Local backups and captured data
+Backups/
+PC_App/logs/
+
+# Keil build output and personal IDE settings
+MDK-ARM/CCD/
+MDK-ARM/.vscode/
+MDK-ARM/DebugConfig/
+MDK-ARM/*.uvoptx
+MDK-ARM/*.uvguix.*
+MDK-ARM/*.lst
+
+# Python and local test output
+**/__pycache__/
+*.py[cod]
+Tests/*.exe
+
+# Windows and editor temporary files
+Thumbs.db
+Desktop.ini
+*.bak
+*.tmp
+*~
