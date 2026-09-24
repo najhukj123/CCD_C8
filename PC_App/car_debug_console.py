@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import math
 import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -155,7 +156,7 @@ class CarDebugConsole(tk.Tk):
         self.max_steer_var = tk.StringVar(value="120")
         self.right_trim_var = tk.StringVar(value="0.996")
         self.left_trim_var = tk.StringVar(value="1.004")
-        self.freeze_var = tk.BooleanVar(value=True)
+        self.freeze_var = tk.BooleanVar(value=False)
         self.calibration_var = tk.StringVar(value="")
         self.connection_var = tk.StringVar(value="未连接")
         self.track_var = tk.StringVar(value="等待循迹状态")
@@ -198,7 +199,7 @@ class CarDebugConsole(tk.Tk):
         )
         stream_box.pack(side=tk.LEFT, padx=5)
         stream_box.bind("<<ComboboxSelected>>", lambda _event: self.apply_stream())
-        ttk.Checkbutton(toolbar, text="丢线时冻结波形", variable=self.freeze_var).pack(side=tk.LEFT, padx=12)
+        ttk.Checkbutton(toolbar, text="丢线时冻结波形", variable=self.freeze_var, command=self.on_freeze_toggle).pack(side=tk.LEFT, padx=12)
         ttk.Button(toolbar, text="继续实时", command=self.resume_live).pack(side=tk.LEFT)
         ttk.Button(toolbar, text="保存当前帧", command=self.save_current_frame).pack(side=tk.LEFT, padx=6)
         ttk.Label(toolbar, textvariable=self.connection_var).pack(side=tk.RIGHT)
@@ -242,7 +243,7 @@ class CarDebugConsole(tk.Tk):
 
         plots = ttk.Frame(self, padding=(8, 0, 8, 6))
         plots.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(plots, text="CCD 原始灰度（蓝） · 阈值（红虚线） · 识别边界（绿） · 识别中心（黄） · 物理中点（白虚线） · 校准零点（紫虚线）").pack(anchor=tk.W)
+        ttk.Label(plots, text="CCD 原始灰度（蓝） · 阈值（红虚线） · STM32边界（绿） · 本地候选（橙） · 像素中点（白虚线） · 校准零点（紫虚线）").pack(anchor=tk.W)
         self.raw_canvas = tk.Canvas(plots, background="#101820", highlightthickness=1, highlightbackground="#65727d")
         self.raw_canvas.pack(fill=tk.BOTH, expand=True, pady=(3, 8))
         ttk.Label(plots, text="有效赛道（二值化筛选后；两端阴影不计入）").pack(anchor=tk.W)
@@ -450,6 +451,10 @@ class CarDebugConsole(tk.Tk):
         self.frozen_motor = None
         self.redraw()
 
+    def on_freeze_toggle(self) -> None:
+        if not self.freeze_var.get():
+            self.resume_live()
+
     def toggle_recording(self) -> None:
         if self.recorder is not None:
             self._finish_recording(open_plotter=True)
@@ -587,8 +592,9 @@ class CarDebugConsole(tk.Tk):
             if packet.mode == 3 and packet.ready_flags & 0x80:
                 parking_state = (packet.ready_flags >> 2) & 0x03
                 parking = ("等起点", "驶离起点", "等终点", "未知状态")[parking_state] + " · "
+            wave_note = " · 下方波形已冻结" if self.frozen_frame is not None else ""
             self.track_var.set(
-                f"{parking}{state}  边界 {packet.track_left}~{packet.track_right}  线宽 {packet.track_width}  "
+                f"{parking}{state}{wave_note}  边界 {packet.track_left}~{packet.track_right}  线宽 {packet.track_width}  "
                 f"中心 {packet.filtered_center:.1f}  零点 {zero:.1f}  "
                 f"偏差 {packet.track_error:+.1f}  转向 {packet.steering:+.1f}rpm"
             )
@@ -657,7 +663,7 @@ class CarDebugConsole(tk.Tk):
         messagebox.showinfo("保存完成", f"已保存{len(self.events)}条事件及对应波形。")
 
     def save_current_frame(self) -> None:
-        frame = self.frozen_frame or self.current_frame
+        frame = self.current_frame
         if frame is None:
             messagebox.showinfo("没有数据", "收到 CCD 波形后才能保存。")
             return
@@ -668,8 +674,8 @@ class CarDebugConsole(tk.Tk):
         )
         if not path:
             return
-        threshold = self._effective_threshold(frame.pixels)
-        boundary = self._visible_boundary(frame.pixels, threshold)
+        threshold = self._effective_threshold(frame.pixels, live=True)
+        boundary = self._visible_boundary(frame.pixels, threshold, live=True)
         with open(path, "w", newline="", encoding="utf-8-sig") as handle:
             writer = csv.writer(handle)
             writer.writerow(("pixel", "gray", "active"))
@@ -684,7 +690,7 @@ class CarDebugConsole(tk.Tk):
         self._draw_raw(frame.pixels)
         self._draw_binary(frame.pixels)
 
-    def _effective_threshold(self, pixels: bytes) -> int:
+    def _effective_threshold(self, pixels: bytes, *, live: bool = False) -> int:
         """Return the manual threshold, or the same automatic value as STM32."""
         try:
             configured = int(float(self.threshold_var.get()))
@@ -692,32 +698,35 @@ class CarDebugConsole(tk.Tk):
             configured = 0
         if configured > 0:
             return max(0, min(255, configured))
-        packet = self.frozen_motor or self.current_motor
+        packet = self.current_motor if live else self.frozen_motor or self.current_motor
         if packet is not None and packet.tracking_available and packet.threshold > 0:
             return packet.threshold
         return automatic_threshold(pixels)
 
-    def _visible_boundary(self, pixels: bytes, threshold: int):
-        """Prefer STM32's result, but support firmware without tracking fields."""
-        packet = self.frozen_motor or self.current_motor
+    def _visible_boundary(self, pixels: bytes, threshold: int, *, live: bool = False):
+        """Show STM32's result, or label a local candidate when STM32 is LOST."""
+        packet = self.current_motor if live else self.frozen_motor or self.current_motor
         if packet is not None and packet.tracking_available:
             if (packet.track_state == 2 and
-                0 <= packet.track_left < packet.track_right < len(pixels) and
-                abs((packet.track_left + packet.track_right) / 2 - 499.5) <= 250):
-                return packet.track_left, packet.track_right, packet.filtered_center
-            return None
+                0 <= packet.track_left < packet.track_right < len(pixels)):
+                return packet.track_left, packet.track_right, packet.filtered_center, "STM32"
+        reference_center = None
+        if packet is not None and packet.tracking_available:
+            reference_center = packet.filtered_center - packet.track_error
         detection = detect_track(
             pixels,
             threshold,
             dark_line=self.line_mode_var.get() == "黑线",
             minimum_width=20,
             maximum_width=350,
+            reference_center=reference_center,
             roi_start=30,
             roi_end=969,
         )
         if detection is None:
             return None
-        return detection.left, detection.right, detection.center
+        source = "本地候选（STM32未识别）" if packet is not None and packet.tracking_available else "本地"
+        return detection.left, detection.right, detection.center, source
 
     def _draw_raw(self, pixels: bytes) -> None:
         canvas = self.raw_canvas
@@ -760,20 +769,18 @@ class CarDebugConsole(tk.Tk):
         else:
             canvas.itemconfigure(self.raw_calibrated_center, state=tk.HIDDEN)
         boundary = self._visible_boundary(pixels, threshold)
-        source = ""
         if boundary is not None:
-            packet = self.frozen_motor or self.current_motor
-            source = "STM32" if packet is not None and packet.tracking_available else "本地"
+            color = "#ffae42" if boundary[3] != "STM32" else "#66d17a"
             for item, position in zip(
-                (self.raw_left, self.raw_right, self.raw_center), boundary
+                (self.raw_left, self.raw_right, self.raw_center), boundary[:3]
             ):
                 x = left + position / 999 * (right - left)
                 canvas.coords(item, x, top, x, bottom)
-                canvas.itemconfigure(item, state=tk.NORMAL)
+                canvas.itemconfigure(item, fill=color, state=tk.NORMAL)
         else:
             for item in (self.raw_left, self.raw_right, self.raw_center):
                 canvas.itemconfigure(item, state=tk.HIDDEN)
-        boundary_text = "未识别" if boundary is None else f"{source}边界 {boundary[0]}~{boundary[1]}"
+        boundary_text = "未识别" if boundary is None else f"{boundary[3]}边界 {boundary[0]}~{boundary[1]}"
         canvas.itemconfigure(
             self.raw_info,
             text=(
@@ -793,6 +800,7 @@ class CarDebugConsole(tk.Tk):
             self.binary_wave = canvas.create_line(left, bottom, right, bottom, fill="#66d17a", width=1.5)
             self.binary_size = (width, height)
         boundary = self._visible_boundary(pixels, self._effective_threshold(pixels))
+        canvas.itemconfigure(self.binary_wave, fill="#ffae42" if boundary is not None and boundary[3] != "STM32" else "#66d17a")
         points: list[float] = []
         for index in range(len(pixels)):
             active = boundary is not None and boundary[0] <= index <= boundary[1]
@@ -805,4 +813,12 @@ class CarDebugConsole(tk.Tk):
 
 
 if __name__ == "__main__":
-    CarDebugConsole().mainloop()
+    app = CarDebugConsole()
+    if len(sys.argv) > 1:
+        requested_port = sys.argv[1].upper()
+        for label, port in app.port_lookup.items():
+            if port.upper() == requested_port:
+                app.port_var.set(label)
+                app.after(100, app.toggle_connection)
+                break
+    app.mainloop()

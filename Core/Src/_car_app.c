@@ -78,7 +78,7 @@ static const LineConfig line_config = {
   30U,                    // roi_margin：左右两端各忽略 30 个像素。
   20U,                    // min_width：有效线段最小宽度。
   350U,                   // max_width：有效线段最大宽度。
-  250.0f,                 // max_center_offset：线中心距传感器中点的上限。
+  300.0f,                 // max_center_offset：线中心距标定零点的上限；允许首次找到偏装的线。
   180.0f,                 // max_jump：连续两帧允许的最大中心跳变。
   0.28f,                  // filter_alpha：中心位置的低通滤波系数。
   3U,                     // hold_frames：短暂丢线时保持上次偏差的帧数。

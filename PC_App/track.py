@@ -97,6 +97,7 @@ class TrackFollower:
             previous_center=self.previous_raw_center,
             minimum_width=self.minimum_width,
             maximum_width=self.maximum_width,
+            reference_center=self.zero_center,
             roi_start=self.roi_margin,
             roi_end=len(pixels) - 1 - self.roi_margin,
         )
@@ -135,6 +136,9 @@ class TrackFollower:
                 lost_frames=self.lost_frames,
             )
 
+        # 丢线后重新找线时，不再拿很久以前的位置限制跳变。
+        self.previous_raw_center = None
+        self.filtered_center = None
         return TrackingResult(
             detection=None,
             filtered_center=None,
@@ -152,7 +156,8 @@ def detect_track(
     previous_center: float | None = None,
     minimum_width: int = 4,
     maximum_width: int = 400,
-    maximum_center_offset: float = 250.0,
+    maximum_center_offset: float = 300.0,
+    reference_center: float | None = None,
     roi_start: int = 0,
     roi_end: int | None = None,
 ) -> TrackDetection | None:
@@ -166,6 +171,9 @@ def detect_track(
     if roi_start > roi_end:
         return None
 
+    sensor_center = (len(pixels) - 1) / 2.0
+    if reference_center is None:
+        reference_center = sensor_center
     runs: list[tuple[int, int]] = []
     run_start: int | None = None
     for index in range(roi_start, roi_end + 2):
@@ -181,8 +189,7 @@ def detect_track(
             # the dark unused areas commonly visible at both sensor ends.
             has_two_edges = run_start > roi_start + 2 and right < roi_end - 2
             center = (run_start + right) / 2.0
-            sensor_center = (len(pixels) - 1) / 2.0
-            inside_centre = abs(center - sensor_center) <= maximum_center_offset
+            inside_centre = abs(center - reference_center) <= maximum_center_offset
             if minimum_width <= width <= maximum_width and has_two_edges and inside_centre:
                 runs.append((run_start, right))
             run_start = None
@@ -190,8 +197,7 @@ def detect_track(
     if not runs:
         return None
 
-    sensor_center = (len(pixels) - 1) / 2.0
-    target = previous_center if previous_center is not None else sensor_center
+    target = previous_center if previous_center is not None else reference_center
     left, right = min(
         runs,
         key=lambda run: (abs(((run[0] + run[1]) / 2.0) - target), -(run[1] - run[0] + 1)),

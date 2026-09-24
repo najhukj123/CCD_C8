@@ -93,7 +93,8 @@ void LineTracker_Update(LineTracker *tracker, const uint8_t *pixels)
   uint8_t in_run = 0U;
   uint8_t found = 0U;
   uint8_t contrast_ok = 1U;
-  float sensor_center = ((float)config->pixel_count - 1.0f) * 0.5f;
+  // 标定后，搜索范围要跟着零点走；固定在像素中点会丢掉偏装的真实黑线。
+  float search_center = tracker->zero_center;
   float target_center = tracker->state == LINE_LOST ?
       tracker->zero_center : tracker->filtered_center;
   float best_distance = 100000.0f;
@@ -134,7 +135,7 @@ void LineTracker_Update(LineTracker *tracker, const uint8_t *pixels)
       // 两端各留出 2 像素背景；宽度、位置符合条件时选择离上次中心最近的线。
       if (run_start > first + 2U && right < last - 2U &&
           width >= config->min_width && width <= config->max_width &&
-          AbsFloat(center - sensor_center) <= config->max_center_offset &&
+          AbsFloat(center - search_center) <= config->max_center_offset &&
           (!found || distance < best_distance))
       {
         found = 1U;

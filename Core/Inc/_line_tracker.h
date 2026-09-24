@@ -12,7 +12,7 @@ typedef struct
   uint16_t roi_margin;        // 左右两端各排除的像素数。
   uint16_t min_width;         // 有效赛道的最小宽度。
   uint16_t max_width;         // 有效赛道的最大宽度。
-  float max_center_offset;    // 候选中心到物理中点的最大距离。
+  float max_center_offset;    // 候选中心到标定零点的最大距离。
   float max_jump;             // 相邻有效帧的中心最大跳变。
   float filter_alpha;         // 中心位置一阶滤波系数。
   uint8_t hold_frames;        // 临时丢线时允许沿用旧偏差的帧数。
