@@ -6,7 +6,9 @@
 enum
 {
   CCD_PREFIX_BYTES = 10,
-  CCD_FRAME_BYTES = CCD_PREFIX_BYTES + CCD_SENSOR_PIXEL_COUNT,
+  // 模块在原生软件中的“使用长度”为 1500；一帧共 10 + 1500 字节。
+  CCD_MODULE_PIXEL_COUNT = 1500,
+  CCD_FRAME_BYTES = CCD_PREFIX_BYTES + CCD_MODULE_PIXEL_COUNT,
   CCD_SPI_CHUNK = 64
 };
 
@@ -31,8 +33,9 @@ void CcdSensor_Init(void)
   for (index = 0U; index < CCD_SPI_CHUNK; ++index)
     sensor.dummy[index] = 0xFFU;
 
-  // 模块的前 10 字节是帧头，循迹和上位机只使用后面的 1000 个像素。
-  sensor.frame.pixels = sensor.bytes + CCD_PREFIX_BYTES;
+  // 指针会在每帧读取后指向完整像素区中央的 1000 点。
+  sensor.frame.pixels = sensor.bytes + CCD_PREFIX_BYTES +
+                        (CCD_MODULE_PIXEL_COUNT - CCD_SENSOR_PIXEL_COUNT) / 2U;
 
   // 初始化前若 DR 已经拉低，也要读取这帧，避免只等下一次下降沿。
   if (HAL_GPIO_ReadPin(CCD_DR_GPIO_Port, CCD_DR_Pin) == GPIO_PIN_RESET)
@@ -42,8 +45,10 @@ void CcdSensor_Init(void)
 const CcdFrame *CcdSensor_ReadFrame(void)
 {
   uint16_t received = 0U;
+  uint16_t module_pixels = CCD_MODULE_PIXEL_COUNT;
+  uint16_t frame_bytes;
   uint16_t index;
-  uint8_t *pixels = sensor.bytes + CCD_PREFIX_BYTES;
+  uint8_t *pixels;
   uint8_t success = 1U;
 
   if (!sensor.ready) return 0;
@@ -52,11 +57,32 @@ const CcdFrame *CcdSensor_ReadFrame(void)
   sensor.ready = 0U;
   HAL_GPIO_WritePin(CCD_CS_GPIO_Port, CCD_CS_Pin, GPIO_PIN_RESET);
 
-  // SPI 是全双工：发送 0xFF 才能同步读取模块输出的数据。
-  // 分段读取与原实现一致，避免在栈上准备整帧发送缓冲区。
-  while (received < CCD_FRAME_BYTES)
+  // 先取 10 字节帧头。原生软件的串口帧头用 07 21 ... 21 07，
+  // 第 2、3 字节是实际像素数。SPI 若不提供同样的头，则按当前
+  // 模块配置的 1500 点读取，避免把原先未解析的帧头当作硬性依赖。
+  if (HAL_SPI_TransmitReceive(&hspi1, sensor.dummy, sensor.bytes,
+                              CCD_PREFIX_BYTES, 100U) != HAL_OK)
+    success = 0U;
+  else
   {
-    uint16_t count = CCD_FRAME_BYTES - received;
+    received = CCD_PREFIX_BYTES;
+    if (sensor.bytes[0] == 0x07U && sensor.bytes[1] == 0x21U &&
+        sensor.bytes[8] == 0x21U && sensor.bytes[9] == 0x07U)
+    {
+      uint16_t reported = (uint16_t)sensor.bytes[2] |
+                          ((uint16_t)sensor.bytes[3] << 8);
+      if (reported >= CCD_SENSOR_PIXEL_COUNT &&
+          reported <= CCD_MODULE_PIXEL_COUNT)
+        module_pixels = reported;
+    }
+  }
+
+  frame_bytes = CCD_PREFIX_BYTES + module_pixels;
+  // SPI 是全双工：发送 0xFF 才能同步读取模块输出的数据。
+  // 分段读取，避免在栈上准备整帧发送缓冲区。
+  while (success && received < frame_bytes)
+  {
+    uint16_t count = frame_bytes - received;
     if (count > CCD_SPI_CHUNK) count = CCD_SPI_CHUNK;
     if (HAL_SPI_TransmitReceive(&hspi1, sensor.dummy,
                                 sensor.bytes + received, count, 100U) != HAL_OK)
@@ -71,7 +97,11 @@ const CcdFrame *CcdSensor_ReadFrame(void)
   sensor.reading = 0U;
   if (!success) return 0;
 
-  // 只镜像像素区，保留模块帧头；镜像后左、右方向与车体一致。
+  // 取完整视野的中央 1000 点，再按车体左右方向镜像。
+  // 原先只取前 1000 点：1500 点的中央线(约第 750 点)会显示在第 249 点。
+  pixels = sensor.bytes + CCD_PREFIX_BYTES +
+           (module_pixels - CCD_SENSOR_PIXEL_COUNT) / 2U;
+  sensor.frame.pixels = pixels;
   for (index = 0U; index < CCD_SENSOR_PIXEL_COUNT / 2U; ++index)
   {
     uint8_t value = pixels[index];
