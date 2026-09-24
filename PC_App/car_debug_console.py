@@ -691,16 +691,16 @@ class CarDebugConsole(tk.Tk):
         self._draw_binary(frame.pixels)
 
     def _effective_threshold(self, pixels: bytes, *, live: bool = False) -> int:
-        """Return the manual threshold, or the same automatic value as STM32."""
+        """Use STM32's actual threshold when its telemetry is available."""
+        packet = self.current_motor if live else self.frozen_motor or self.current_motor
+        if packet is not None and packet.tracking_available and packet.threshold > 0:
+            return packet.threshold
         try:
             configured = int(float(self.threshold_var.get()))
         except (TypeError, ValueError):
             configured = 0
         if configured > 0:
             return max(0, min(255, configured))
-        packet = self.current_motor if live else self.frozen_motor or self.current_motor
-        if packet is not None and packet.tracking_available and packet.threshold > 0:
-            return packet.threshold
         return automatic_threshold(pixels)
 
     def _visible_boundary(self, pixels: bytes, threshold: int, *, live: bool = False):
