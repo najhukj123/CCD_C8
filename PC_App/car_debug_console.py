@@ -64,6 +64,8 @@ class BluetoothLink(threading.Thread):
         self.frame_parser = PacketParser()
         self.motor_parser = MotorPacketParser()
         self.write_lock = threading.Lock()
+        self.ccd_packets_received = 0
+        self.invalid_ccd_frames = 0
 
     @staticmethod
     def _put_latest(output: queue.Queue, value: object) -> None:
@@ -87,6 +89,12 @@ class BluetoothLink(threading.Thread):
                 if not chunk:
                     continue
                 for frame in self.frame_parser.feed(chunk):
+                    self.ccd_packets_received += 1
+                    # 实测偶发整帧 1000 个像素均为 7；CRC 正确只说明
+                    # STM32 完整地上传了这帧，不能证明 CCD 采集有效。
+                    if frame.pixels.count(7) == len(frame.pixels):
+                        self.invalid_ccd_frames += 1
+                        continue
                     self._put_latest(self.frames, frame)
                 for packet in self.motor_parser.feed(chunk):
                     self._put_latest(self.telemetry, packet)
@@ -141,7 +149,6 @@ class CarDebugConsole(tk.Tk):
         self.frame_count = 0
         self.frame_rate_count = 0
         self.frame_rate_started = time.monotonic()
-        self.last_frame_sequence: int | None = None
         self.dropped_frames = 0
         self.recorder: TelemetryRecorder | None = None
         self.last_recording: Path | None = None
@@ -286,6 +293,15 @@ class CarDebugConsole(tk.Tk):
         if not port:
             messagebox.showwarning("没有串口", "请先配对 HC-05，并选择它的输出 COM 口。")
             return
+        for pending in (self.frames, self.telemetry, self.errors):
+            while not pending.empty():
+                try:
+                    pending.get_nowait()
+                except queue.Empty:
+                    break
+        self.current_frame = None
+        self.frozen_frame = None
+        self.frozen_motor = None
         self.link = BluetoothLink(port, self.frames, self.telemetry, self.errors)
         self.link.start()
         self.connect_button.configure(text="断开")
@@ -293,6 +309,10 @@ class CarDebugConsole(tk.Tk):
         self.connection_var.set(f"正在连接 {port} · {BAUD_RATE} 8N1")
         self.last_keepalive = time.monotonic()
         self.previous_track_state = None
+        self.frame_count = 0
+        self.frame_rate_count = 0
+        self.frame_rate_started = time.monotonic()
+        self.dropped_frames = 0
 
     def disconnect(self) -> None:
         if self.recorder is not None:
@@ -525,16 +545,15 @@ class CarDebugConsole(tk.Tk):
             pass
 
         if latest_frame is not None:
-            if self.last_frame_sequence is not None:
-                gap = (latest_frame.sequence - self.last_frame_sequence - 1) & 0xFFFF
-                if gap < 0x8000:
-                    self.dropped_frames += gap
-            self.last_frame_sequence = latest_frame.sequence
             self.current_frame = latest_frame
             self.frame_count += 1
             self.frame_rate_count += 1
-            if self.frozen_frame is None:
-                self.redraw()
+
+        # CCD 序号随每次采样递增，而固件只每约 80 ms 上传一帧；序号间隔
+        # 不能当作串口丢包。这里统计接收线程取得、界面却没画出的有效帧。
+        if self.link is not None:
+            valid_received = self.link.ccd_packets_received - self.link.invalid_ccd_frames
+            self.dropped_frames = max(0, valid_received - self.frame_count)
 
         if self.recorder is not None:
             frame_crc = self.link.frame_parser.crc_errors if self.link else 0
@@ -556,6 +575,7 @@ class CarDebugConsole(tk.Tk):
                 self._observe_center_calibration(packet, now)
             self._update_telemetry(latest_motor)
             self._check_events(latest_motor)
+        if latest_frame is not None or (latest_motor is not None and self.frozen_frame is not None):
             self.redraw()
         self._check_center_calibration_timeout(now)
 
@@ -574,9 +594,12 @@ class CarDebugConsole(tk.Tk):
             self.frame_rate_started = now
             frame_crc = self.link.frame_parser.crc_errors if self.link else 0
             motor_crc = self.link.motor_parser.crc_errors if self.link else 0
+            received = self.link.ccd_packets_received if self.link else 0
+            invalid = self.link.invalid_ccd_frames if self.link else 0
             freeze = " · 已冻结异常帧" if self.frozen_frame is not None else ""
             self.stats_var.set(
-                f"CCD {fps:.1f}帧/s · 收到{self.frame_count} · 序号跳过{self.dropped_frames} · CRC {frame_crc + motor_crc}{freeze}"
+                f"CCD显示 {fps:.1f}帧/s · 收到{received} · 全7异常帧{invalid} · "
+                f"界面略过{self.dropped_frames} · CRC {frame_crc + motor_crc}{freeze}"
             )
             if self.recorder is not None:
                 self.recording_var.set(f"正在记录：{self.recorder.samples} 点 · {self.recorder.path.name}")
@@ -694,7 +717,10 @@ class CarDebugConsole(tk.Tk):
         """Use STM32's actual threshold when its telemetry is available."""
         packet = self.current_motor if live else self.frozen_motor or self.current_motor
         if packet is not None and packet.tracking_available and packet.threshold > 0:
-            return packet.threshold
+            # MTR2 和 CCD1 独立发送。异常全7帧的阈值不能拿来画上一帧
+            # 正常波形，否则红线会在 7 与正常阈值之间来回闪。
+            if min(pixels) < packet.threshold < max(pixels):
+                return packet.threshold
         try:
             configured = int(float(self.threshold_var.get()))
         except (TypeError, ValueError):

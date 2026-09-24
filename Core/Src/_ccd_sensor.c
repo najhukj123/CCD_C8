@@ -101,6 +101,14 @@ const CcdFrame *CcdSensor_ReadFrame(void)
   // 原先只取前 1000 点：1500 点的中央线(约第 750 点)会显示在第 249 点。
   pixels = sensor.bytes + CCD_PREFIX_BYTES +
            (module_pixels - CCD_SENSOR_PIXEL_COUNT) / 2U;
+  // COM18 实测偶发 1000 个像素全部为 7。这样的整帧不是正常灰度图，
+  // 不交给循迹算法，也不上传给上位机；下一次有效帧仍会正常处理。
+  if (pixels[0] == 7U)
+  {
+    for (index = 1U; index < CCD_SENSOR_PIXEL_COUNT; ++index)
+      if (pixels[index] != 7U) break;
+    if (index == CCD_SENSOR_PIXEL_COUNT) return 0;
+  }
   sensor.frame.pixels = pixels;
   for (index = 0U; index < CCD_SENSOR_PIXEL_COUNT / 2U; ++index)
   {
