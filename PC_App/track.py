@@ -161,7 +161,11 @@ def detect_track(
     roi_start: int = 0,
     roi_end: int | None = None,
 ) -> TrackDetection | None:
-    """Find a plausible continuous line segment and return its centre error."""
+    """Find the first threshold crossing from each side and their centre.
+
+    previous_center stays in this API for existing callers; it no longer
+    chooses one dark segment over another.
+    """
     if not pixels:
         return None
     if roi_end is None:
@@ -174,39 +178,33 @@ def detect_track(
     sensor_center = (len(pixels) - 1) / 2.0
     if reference_center is None:
         reference_center = sensor_center
-    runs: list[tuple[int, int]] = []
-    run_start: int | None = None
-    for index in range(roi_start, roi_end + 2):
-        active = False
-        if index <= roi_end:
+    def first_line_pixel(indices: range) -> int | None:
+        background_pixels = 0
+        for index in indices:
             active = pixels[index] < threshold if dark_line else pixels[index] >= threshold
-        if active and run_start is None:
-            run_start = index
-        elif not active and run_start is not None:
-            right = index - 1
-            width = right - run_start + 1
-            # A real valley must have background on both sides.  This rejects
-            # the dark unused areas commonly visible at both sensor ends.
-            has_two_edges = run_start > roi_start + 2 and right < roi_end - 2
-            center = (run_start + right) / 2.0
-            inside_centre = abs(center - reference_center) <= maximum_center_offset
-            if minimum_width <= width <= maximum_width and has_two_edges and inside_centre:
-                runs.append((run_start, right))
-            run_start = None
-
-    if not runs:
+            if not active:
+                background_pixels = min(background_pixels + 1, 3)
+            elif background_pixels >= 3:
+                return index
         return None
 
-    target = previous_center if previous_center is not None else reference_center
-    left, right = min(
-        runs,
-        key=lambda run: (abs(((run[0] + run[1]) / 2.0) - target), -(run[1] - run[0] + 1)),
-    )
+    # Keep the same three-background-pixel guard as the STM32.  A dark strip
+    # clipped by the sensor edge is skipped before looking for the line.
+    left = first_line_pixel(range(roi_start, roi_end + 1))
+    right = first_line_pixel(range(roi_end, roi_start - 1, -1))
+    if left is None or right is None or right <= left:
+        return None
+
+    width = right - left + 1
     center = (left + right) / 2.0
+    if not (minimum_width <= width <= maximum_width):
+        return None
+    if abs(center - reference_center) > maximum_center_offset:
+        return None
     return TrackDetection(
         left=left,
         right=right,
         center=center,
         error=center - sensor_center,
-        width=right - left + 1,
+        width=width,
     )

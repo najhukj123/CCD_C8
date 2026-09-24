@@ -87,17 +87,14 @@ void LineTracker_Update(LineTracker *tracker, const uint8_t *pixels)
   uint16_t first = config->roi_margin;
   uint16_t last = config->pixel_count - first - 1U;
   uint16_t index;
-  uint16_t run_start = 0U;
   uint16_t best_left = 0U;
   uint16_t best_right = 0U;
-  uint8_t in_run = 0U;
-  uint8_t found = 0U;
+  uint8_t left_found = 0U;
+  uint8_t right_found = 0U;
+  uint8_t background_pixels = 0U;
   uint8_t contrast_ok = 1U;
   // 标定后，搜索范围要跟着零点走；固定在像素中点会丢掉偏装的真实黑线。
   float search_center = tracker->zero_center;
-  float target_center = tracker->state == LINE_LOST ?
-      tracker->zero_center : tracker->filtered_center;
-  float best_distance = 100000.0f;
 
   if (config->threshold == 0U)
     tracker->threshold_used = AutomaticThreshold(pixels, first, last,
@@ -111,43 +108,45 @@ void LineTracker_Update(LineTracker *tracker, const uint8_t *pixels)
     return;
   }
 
-  // 扫描连续的暗区或亮区；末尾多扫描一次，以便结束最后一个候选段。
-  for (index = first; index <= last + 1U; ++index)
+  // 从左向右找第一个跨过阈值的线像素，作为左边界。
+  // 边缘暗区先跳过；至少看到 3 个背景像素后才接受边界。
+  for (index = first; index <= last; ++index)
   {
-    uint8_t active = 0U;
-    if (index <= last)
-      active = config->dark_line ?
-          (pixels[index] < tracker->threshold_used) :
-          (pixels[index] >= tracker->threshold_used);
-
-    if (active && !in_run)
+    uint8_t active = config->dark_line ?
+        (pixels[index] < tracker->threshold_used) :
+        (pixels[index] >= tracker->threshold_used);
+    if (!active)
     {
-      run_start = index;
-      in_run = 1U;
+      if (background_pixels < 3U) ++background_pixels;
     }
-    else if (!active && in_run)
+    else if (background_pixels >= 3U)
     {
-      uint16_t right = index - 1U;
-      uint16_t width = right - run_start + 1U;
-      float center = ((float)run_start + right) * 0.5f;
-      float distance = AbsFloat(center - target_center);
-
-      // 两端各留出 2 像素背景；宽度、位置符合条件时选择离上次中心最近的线。
-      if (run_start > first + 2U && right < last - 2U &&
-          width >= config->min_width && width <= config->max_width &&
-          AbsFloat(center - search_center) <= config->max_center_offset &&
-          (!found || distance < best_distance))
-      {
-        found = 1U;
-        best_left = run_start;
-        best_right = right;
-        best_distance = distance;
-      }
-      in_run = 0U;
+      best_left = index;
+      left_found = 1U;
+      break;
     }
   }
 
-  if (!found)
+  // 从右向左同样找第一个线像素，作为右边界。
+  background_pixels = 0U;
+  for (index = last; index > first; --index)
+  {
+    uint8_t active = config->dark_line ?
+        (pixels[index] < tracker->threshold_used) :
+        (pixels[index] >= tracker->threshold_used);
+    if (!active)
+    {
+      if (background_pixels < 3U) ++background_pixels;
+    }
+    else if (background_pixels >= 3U)
+    {
+      best_right = index;
+      right_found = 1U;
+      break;
+    }
+  }
+
+  if (!left_found || !right_found || best_right <= best_left)
   {
     MarkLineMissing(tracker);
     return;
@@ -155,7 +154,14 @@ void LineTracker_Update(LineTracker *tracker, const uint8_t *pixels)
 
   // 连续跟踪期间，突然跳到远处的阴影属于可疑帧，不更新赛道中心。
   {
+    uint16_t width = best_right - best_left + 1U;
     float center = ((float)best_left + best_right) * 0.5f;
+    if (width < config->min_width || width > config->max_width ||
+        AbsFloat(center - search_center) > config->max_center_offset)
+    {
+      MarkLineMissing(tracker);
+      return;
+    }
     if (tracker->state != LINE_LOST &&
         AbsFloat(center - tracker->filtered_center) > config->max_jump)
     {
@@ -165,7 +171,7 @@ void LineTracker_Update(LineTracker *tracker, const uint8_t *pixels)
 
     tracker->left = best_left;
     tracker->right = best_right;
-    tracker->width = best_right - best_left + 1U;
+    tracker->width = width;
     tracker->raw_center = center;
     if (tracker->state == LINE_LOST)
       tracker->filtered_center = center;
