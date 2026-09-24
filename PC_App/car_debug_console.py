@@ -24,7 +24,7 @@ from track import automatic_threshold, detect_track
 
 
 TRACK_STATES = {0: "LOST", 1: "HOLD", 2: "TRACKING"}
-MODE_NAMES = {0: "停止", 1: "右轮闭环", 2: "左轮闭环", 3: "自动循迹", 4: "双轮闭环", 5: "右轮开环", 6: "左轮开环"}
+MODE_NAMES = {0: "停止", 1: "右轮闭环", 2: "左轮闭环", 3: "自动循迹", 4: "双轮闭环", 5: "右轮开环", 6: "左轮开环", 7: "已到停车线"}
 
 
 @dataclass
@@ -583,8 +583,12 @@ class CarDebugConsole(tk.Tk):
         self.connection_var.set(f"蓝牙正常 · {BAUD_RATE} 8N1 · 模式：{mode}")
         if packet.tracking_available:
             zero = packet.filtered_center - packet.track_error
+            parking = ""
+            if packet.mode == 3 and packet.ready_flags & 0x80:
+                parking_state = (packet.ready_flags >> 2) & 0x03
+                parking = ("等起点", "驶离起点", "等终点", "未知状态")[parking_state] + " · "
             self.track_var.set(
-                f"{state}  边界 {packet.track_left}~{packet.track_right}  线宽 {packet.track_width}  "
+                f"{parking}{state}  边界 {packet.track_left}~{packet.track_right}  线宽 {packet.track_width}  "
                 f"中心 {packet.filtered_center:.1f}  零点 {zero:.1f}  "
                 f"偏差 {packet.track_error:+.1f}  转向 {packet.steering:+.1f}rpm"
             )

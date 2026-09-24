@@ -154,7 +154,8 @@ void CarSerial_SendMotor(const CarMotorTelemetry *telemetry)
   memcpy(packet, "MTR2", 4U);
   PutU16(packet + 4, serial_state.motor_sequence++);
   packet[6] = telemetry->drive_mode;
-  packet[7] = 0x03U;  // TIM2 和 TIM3 编码器均已配置。
+  // 低两位是编码器就绪；最高位表示固件支持停车线状态，位 2～3 是状态值。
+  packet[7] = (uint8_t)(0x83U | ((telemetry->parking_state & 0x03U) << 2));
 
   PutFloat(packet + 8, right->target_rpm);
   PutFloat(packet + 12, right->actual_rpm);

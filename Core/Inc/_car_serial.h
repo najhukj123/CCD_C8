@@ -23,6 +23,7 @@ typedef enum
 typedef struct
 {
   uint8_t drive_mode;
+  uint8_t parking_state;  // 0 等起点，1 驶离起点，2 等终点。
   DriveStatus drive;
   const LineTracker *line;
   float max_steer_rpm;

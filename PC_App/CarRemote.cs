@@ -685,7 +685,7 @@ internal sealed class CarRemoteForm : Form
 
     private void UpdateLabels(MotorSample sample)
     {
-        string[] names = { "停止", "右轮闭环", "左轮闭环", "CCD 循迹", "双轮闭环", "右轮开环", "左轮开环" };
+        string[] names = { "停止", "右轮闭环", "左轮闭环", "CCD 循迹", "双轮闭环", "右轮开环", "左轮开环", "已到停车线" };
         modeLabel.Text = "模式：" + (sample.Mode < names.Length ? names[sample.Mode] : sample.Mode.ToString());
         rightLabel.Text = string.Format(CultureInfo.InvariantCulture, "右轮 {0,7:+0.0;-0.0;0.0} / {1,7:+0.0;-0.0;0.0} RPM   PWM {2,6:+0.0;-0.0;0.0}%", sample.RightActual, sample.RightTarget, sample.RightPwm);
         leftLabel.Text = string.Format(CultureInfo.InvariantCulture, "左轮 {0,7:+0.0;-0.0;0.0} / {1,7:+0.0;-0.0;0.0} RPM   PWM {2,6:+0.0;-0.0;0.0}%", sample.LeftActual, sample.LeftTarget, sample.LeftPwm);

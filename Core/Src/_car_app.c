@@ -14,7 +14,12 @@ enum
   CCD_REPORT_PERIOD_MS = 80,
   CCD_TIMEOUT_MS = 300,
   LINK_TIMEOUT_MS = 750,
-  START_RAMP_MS = 600
+  START_RAMP_MS = 600,
+  PARKING_DARK_PERCENT = 70,
+  PARKING_SIDE_DARK_PERCENT = 60,
+  PARKING_CONFIRM_FRAMES = 2,
+  PARKING_CLEAR_FRAMES = 3,
+  PARKING_MIN_LAP_MS = 3000
 };
 
 // 模式编号是 MTR2 报文的一部分，必须与现有上位机保持一致。
@@ -22,8 +27,17 @@ typedef enum
 {
   DRIVE_STOPPED = 0,
   DRIVE_TRACKING = 3,
-  DRIVE_MANUAL = 4
+  DRIVE_MANUAL = 4,
+  DRIVE_PARKED = 7
 } DriveMode;
+
+// 第一次宽黑线是起点；离开它后，再次看到宽黑线才是终点。
+typedef enum
+{
+  PARKING_WAIT_START = 0,
+  PARKING_WAIT_CLEAR = 1,
+  PARKING_WAIT_FINISH = 2
+} ParkingState;
 
 // 这是应用层唯一的运行状态。电机、CCD、串口的内部状态仍由各自模块保存。
 // 把常用字段放在同一层，读代码时可以直接写 car.line、car.base_rpm 等。
@@ -39,6 +53,12 @@ typedef struct
   float max_steer_rpm;
   float previous_line_error;
   float steering_rpm;
+
+  ParkingState parking_state;
+  uint8_t parking_dark_frames;
+  uint8_t parking_clear_frames;
+  uint8_t parking_threshold;  // 最近一次正常循迹的阈值；0 表示还没有参照。
+  uint32_t first_parking_ms;
 
   // HAL_GetTick() 的毫秒时间戳，用来安排周期任务和检测超时。
   uint32_t last_frame_ms;
@@ -81,6 +101,36 @@ static float AbsFloat(float value)
   return value;
 }
 
+// 横向停车线会让 CCD 的大部分视野变黑，包括左右两侧。
+// 使用上一次正常循迹的阈值：整帧都黑时，本帧自动阈值无法区分黑线与背景。
+static uint8_t ParkingLineVisible(const uint8_t *pixels, uint8_t threshold)
+{
+  uint16_t first = car.line.config.roi_margin;
+  uint16_t last = car.line.config.pixel_count - first - 1U;
+  uint16_t width = last - first + 1U;
+  uint16_t side_width = width / 5U;
+  uint16_t index;
+  uint16_t dark = 0U;
+  uint16_t left_dark = 0U;
+  uint16_t right_dark = 0U;
+
+  if (threshold == 0U || side_width == 0U) return 0U;
+  for (index = first; index <= last; ++index)
+  {
+    if (pixels[index] >= threshold) continue;
+    ++dark;
+    if (index < first + side_width) ++left_dark;
+    if (index > last - side_width) ++right_dark;
+  }
+
+  return (uint32_t)dark * 100U >=
+             (uint32_t)width * PARKING_DARK_PERCENT &&
+         (uint32_t)left_dark * 100U >=
+             (uint32_t)side_width * PARKING_SIDE_DARK_PERCENT &&
+         (uint32_t)right_dark * 100U >=
+             (uint32_t)side_width * PARKING_SIDE_DARK_PERCENT;
+}
+
 // 停车：清除循迹转向记忆，并让电机控制器清目标和 PWM。
 static void StopVehicle(void)
 {
@@ -105,7 +155,7 @@ static void UpdateMotors(uint32_t now_ms)
   uint32_t elapsed_ms = (uint32_t)(now_ms - car.launch_ms);
 
   // PC 端超过 750 ms 未发 KEEP 或行驶命令，就进入停车模式。
-  if (car.mode != DRIVE_STOPPED &&
+  if ((car.mode == DRIVE_TRACKING || car.mode == DRIVE_MANUAL) &&
       (uint32_t)(now_ms - car.last_command_ms) > LINK_TIMEOUT_MS)
     StopVehicle();
 
@@ -120,7 +170,62 @@ static void UpdateMotors(uint32_t now_ms)
   DriveControl_Update(ramp);
 }
 
-static void UpdateTracking(const uint8_t *pixels)
+// 返回 1 表示当前帧是宽黑线，本帧不用再按普通窄线计算转向。
+static uint8_t HandleParkingLine(const uint8_t *pixels, uint32_t now_ms)
+{
+  uint8_t threshold = car.line.config.threshold != 0U ?
+      car.line.config.threshold : car.parking_threshold;
+
+  if (car.mode != DRIVE_TRACKING || !car.line.config.dark_line)
+    return 0U;
+
+  if (ParkingLineVisible(pixels, threshold))
+  {
+    // 停车线不是普通窄线，告诉上位机本帧正在暂时保持上次位置。
+    if (car.line.state != LINE_LOST)
+    {
+      car.line.state = LINE_HOLD;
+      car.line.width = 0U;
+    }
+    car.parking_clear_frames = 0U;
+    if (car.parking_dark_frames < PARKING_CONFIRM_FRAMES)
+      ++car.parking_dark_frames;
+
+    if (car.parking_dark_frames >= PARKING_CONFIRM_FRAMES)
+    {
+      if (car.parking_state == PARKING_WAIT_START)
+      {
+        car.parking_state = PARKING_WAIT_CLEAR;
+        car.first_parking_ms = now_ms;
+      }
+      else if (car.parking_state == PARKING_WAIT_FINISH &&
+               (uint32_t)(now_ms - car.first_parking_ms) >= PARKING_MIN_LAP_MS)
+      {
+        StopVehicle();
+        car.mode = DRIVE_PARKED;
+        return 1U;
+      }
+    }
+
+    // 起点宽黑线遮住了原来的窄线，暂时沿上一帧方向驶过它。
+    DriveControl_SetRequested(
+        ClampFloat(car.base_rpm - car.steering_rpm, -DRIVE_MAX_RPM, DRIVE_MAX_RPM),
+        ClampFloat(car.base_rpm + car.steering_rpm, -DRIVE_MAX_RPM, DRIVE_MAX_RPM));
+    return 1U;
+  }
+
+  car.parking_dark_frames = 0U;
+  if (car.parking_state == PARKING_WAIT_CLEAR)
+  {
+    if (car.parking_clear_frames < PARKING_CLEAR_FRAMES)
+      ++car.parking_clear_frames;
+    if (car.parking_clear_frames >= PARKING_CLEAR_FRAMES)
+      car.parking_state = PARKING_WAIT_FINISH;
+  }
+  return 0U;
+}
+
+static void UpdateTracking(const uint8_t *pixels, uint32_t now_ms)
 {
   LineTracker *line = &car.line;
   float steering;
@@ -128,8 +233,12 @@ static void UpdateTracking(const uint8_t *pixels)
   float right_rpm;
   float left_rpm;
 
+  if (HandleParkingLine(pixels, now_ms)) return;
+
   // 停车和手动模式也更新识别结果，便于上位机观察与中心标定。
   LineTracker_Update(line, pixels);
+  if (line->state == LINE_TRACKING && line->config.dark_line)
+    car.parking_threshold = line->threshold_used;
   if (car.mode != DRIVE_TRACKING)
   {
     car.steering_rpm = 0.0f;
@@ -169,6 +278,7 @@ static void SendMotorTelemetry(void)
   // 遥测只借用当前状态，串口会在本次调用中完成打包。
   DriveControl_GetStatus(&telemetry.drive);
   telemetry.drive_mode = (uint8_t)car.mode;
+  telemetry.parking_state = (uint8_t)car.parking_state;
   telemetry.line = &car.line;
   telemetry.max_steer_rpm = car.max_steer_rpm;
   telemetry.steering_rpm = car.steering_rpm;
@@ -263,6 +373,10 @@ static void ParseCommand(char *command)
     // 自动循迹启动时先停旧模式，下一帧 CCD 再决定左右轮速度。
     StopVehicle();
     car.base_rpm = base_rpm;
+    car.parking_state = PARKING_WAIT_START;
+    car.parking_dark_frames = 0U;
+    car.parking_clear_frames = 0U;
+    car.first_parking_ms = 0U;
     car.mode = DRIVE_TRACKING;
     car.last_command_ms = car.launch_ms = now_ms;
     // 等下一帧有效 CCD 数据到来，UpdateTracking 才会写入两轮目标转速。
@@ -317,7 +431,7 @@ void CarApp_Poll(void)
   {
     now_ms = HAL_GetTick();
     car.last_frame_ms = now_ms;
-    UpdateTracking(frame->pixels);
+    UpdateTracking(frame->pixels, now_ms);
     if (CarSerial_StreamEnabled(CAR_STREAM_CCD) &&
         (uint32_t)(now_ms - car.ccd_report_ms) >= CCD_REPORT_PERIOD_MS)
     {
