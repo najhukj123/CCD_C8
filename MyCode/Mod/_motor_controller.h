@@ -2,6 +2,7 @@
 #define MOTOR_CONTROLLER_H
 
 #include <stdint.h>
+#include "pid.h"
 
 // 一个电机的速度控制参数。每圈计数指减速后的输出轴，不是电机裸轴。
 typedef struct
@@ -24,9 +25,7 @@ typedef struct
   float target_rpm;             // 限幅后的目标转速。
   float raw_rpm;                // 本周期编码器计算得到的未滤波转速。
   float actual_rpm;             // 滤波后的实际转速。
-  float error;                  // 当前速度误差。
-  float previous_error;         // 上周期速度误差。
-  float integral;               // 累计误差。
+  PID pid;                     // 单轮独立 PID 状态，由 Algorithm/pid 封装。
   float output_percent;         // 输出给驱动器的有符号 PWM 百分比。
 } MotorController;
 
@@ -34,7 +33,7 @@ typedef struct
 void MotorController_Init(MotorController *motor, const MotorConfig *config);
 // 设置目标转速，并按配置限幅。
 void MotorController_SetTarget(MotorController *motor, float rpm);
-// 清除驱动和 PID 记忆；保留实际转速供停车后的遥测观察。
+// 清除驱动和 PID 记忆；保留实际转速供停车后的调试观察。
 void MotorController_ClearDrive(MotorController *motor);
 // 输入本周期编码器增量，返回有符号 PWM 百分比。
 float MotorController_Update(MotorController *motor, int16_t encoder_delta);

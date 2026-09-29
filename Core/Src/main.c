@@ -1,5 +1,5 @@
 /* USER CODE BEGIN Header */
-// 程序入口只负责时钟、外设和应用初始化；小车业务逻辑位于 _car_app.c。
+// 程序入口只负责时钟、外设和应用初始化；控制逻辑位于 MyCode/Mod/track.c。
 /* USER CODE END Header */
 #include "main.h"
 #include "dma.h"
@@ -8,7 +8,7 @@
 #include "tim.h"
 #include "usart.h"
 /* USER CODE BEGIN Includes */
-#include "_car_app.h"
+#include "track.h"
 /* USER CODE END Includes */
 
 void SystemClock_Config(void);
@@ -24,15 +24,15 @@ int main(void)
   InitializePeripherals();
 
   /* USER CODE BEGIN 2 */
-  // 初始化小车控制、CCD 和串口接收；电机在收到命令前保持停止。
-  CarApp_Init();
+  // 初始化小车控制与 CCD；识别到有效窄线后自动起步。
+  Track_Init();
   /* USER CODE END 2 */
 
   while (1)
   {
     /* USER CODE BEGIN 3 */
-    // 应用轮询负责命令处理、采样和控制。
-    CarApp_Poll();
+    // Mod 轮询负责采样、循迹和双轮速度控制。
+    Track_Poll();
     /* USER CODE END 3 */
   }
 }
