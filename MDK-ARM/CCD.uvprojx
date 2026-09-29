@@ -336,7 +336,7 @@
               <MiscControls></MiscControls>
               <Define>USE_HAL_DRIVER,STM32F103xB</Define>
               <Undefine></Undefine>
-              <IncludePath>../Core/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include</IncludePath>
+              <IncludePath>../Core/Inc;../MyCode/Hardware;../MyCode/Mod;../MyCode/Algorithm;../Drivers/STM32F1xx_HAL_Driver/Inc;../Drivers/STM32F1xx_HAL_Driver/Inc/Legacy;../Drivers/CMSIS/Device/ST/STM32F1xx/Include;../Drivers/CMSIS/Include</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -394,36 +394,6 @@
               <FileName>main.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/main.c</FilePath>
-            </File>
-            <File>
-              <FileName>_car_app.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/_car_app.c</FilePath>
-            </File>
-            <File>
-              <FileName>_car_serial.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/_car_serial.c</FilePath>
-            </File>
-            <File>
-              <FileName>_ccd_sensor.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/_ccd_sensor.c</FilePath>
-            </File>
-            <File>
-              <FileName>_drive_control.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/_drive_control.c</FilePath>
-            </File>
-            <File>
-              <FileName>_motor_controller.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/_motor_controller.c</FilePath>
-            </File>
-            <File>
-              <FileName>_line_tracker.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>../Core/Src/_line_tracker.c</FilePath>
             </File>
             <File>
               <FileName>gpio.c</FileName>
@@ -709,6 +679,61 @@
               <FileName>stm32f1xx_hal_msp.c</FileName>
               <FileType>1</FileType>
               <FilePath>../Core/Src/stm32f1xx_hal_msp.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>MyCode/Hardware</GroupName>
+          <Files>
+            <File>
+              <FileName>motor.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../MyCode/Hardware/motor.c</FilePath>
+            </File>
+            <File>
+              <FileName>encoder.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../MyCode/Hardware/encoder.c</FilePath>
+            </File>
+            <File>
+              <FileName>_ccd_sensor.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../MyCode/Hardware/_ccd_sensor.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>MyCode/Mod</GroupName>
+          <Files>
+            <File>
+              <FileName>track.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../MyCode/Mod/track.c</FilePath>
+            </File>
+            <File>
+              <FileName>_drive_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../MyCode/Mod/_drive_control.c</FilePath>
+            </File>
+            <File>
+              <FileName>_motor_controller.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../MyCode/Mod/_motor_controller.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>MyCode/Algorithm</GroupName>
+          <Files>
+            <File>
+              <FileName>pid.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../MyCode/Algorithm/pid.c</FilePath>
+            </File>
+            <File>
+              <FileName>_line_tracker.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../MyCode/Algorithm/_line_tracker.c</FilePath>
             </File>
           </Files>
         </Group>

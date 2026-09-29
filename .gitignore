@@ -1,6 +1,5 @@
 # Local backups and captured data
 Backups/
-PC_App/logs/
 
 # Keil build output and personal IDE settings
 MDK-ARM/CCD/
@@ -14,6 +13,10 @@ MDK-ARM/*.lst
 **/__pycache__/
 *.py[cod]
 Tests/*.exe
+
+# Generated reports and local working files
+/output/
+/tmp/
 
 # Windows and editor temporary files
 Thumbs.db
